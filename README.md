@@ -64,6 +64,53 @@
 
 ---
 
+## RAG-пайплайн
+
+Используется кастомный RAG-пайплайн без внешних фреймворков (LangChain, LlamaIndex и т.д.) — все компоненты написаны вручную на чистом Python.
+
+### Компоненты
+
+| Этап | Модуль | Что делает |
+|------|--------|------------|
+| **Chunking** | `indexer/chunker.py` | Fixed-size чанки с перекрытием (800 символов, overlap 150). Детерминированные ID чанков через SHA-256 |
+| **Embeddings** | `indexer/embeddings.py` | OpenAI `text-embedding-3-small` (1536 dims). Батчинг по 64, retry с экспоненциальным backoff |
+| **Index** | `indexer/index.py` | Локальный JSON-индекс: документы → чанки → эмбеддинги. Без внешних БД |
+| **Retrieval** | `indexer/retriever.py` | Brute-force cosine similarity (чистый Python, без numpy/FAISS). Top-k поиск по всем чанкам |
+| **Reranking** | `indexer/reranker.py` | LLM-based reranking: GPT оценивает релевантность каждого чанка (score 0–1), пересортировка |
+| **Generation** | `indexer/llm.py` | OpenAI `gpt-4o-mini`, temperature 0.3, max 1024 токенов |
+| **Citations** | `indexer/citations.py` | Пост-валидация цитат: regex-извлечение chunk ID из ответа, проверка против allowed set |
+
+### Три режима RAG
+
+```
+1. Baseline (answer_question)
+   embed query → cosine search top-k → augmented prompt → LLM → ответ
+
+2. Filtered (answer_question_filtered)
+   embed query → cosine search → LLM reranking → threshold filter → fallback → LLM → RAGResult
+
+3. Cited (answer_question_cited)
+   embed query → cosine search → LLM reranking → threshold filter → cited prompt
+   → LLM → citation validation → retry (до 2 попыток) → RAGResult + citations
+```
+
+### Threshold filtering и Fallback
+
+- Чанки ниже порога `threshold` (по умолчанию 0.75) отсекаются
+- Если все чанки ниже порога, работает fallback-стратегия:
+  - `TOP_1` — возвращает лучший чанк с предупреждением
+  - `INSUFFICIENT_CONTEXT` — возвращает пустой ответ
+
+### Особенности
+
+- **Без внешних зависимостей для ML**: cosine similarity на чистом Python, без numpy/scipy/FAISS
+- **Детерминированные chunk ID**: SHA-256 хеш контента → стабильные ID при переиндексации
+- **Incremental sync**: сравнение `last_edited_time` страниц Notion, переиндексация только изменённых
+- **Context budget**: лимит ~12K символов (~3K токенов) на контекст, чанки обрезаются при переполнении
+- **Citation enforcement**: LLM обязана ссылаться на chunk ID, при провале валидации — автоматический retry с более строгим промптом
+
+---
+
 ## Установка
 
 ```bash
