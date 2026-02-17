@@ -1,0 +1,11 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Generated index files
+*.json
+!package.json
+
+# Claude settings
+.claude/
